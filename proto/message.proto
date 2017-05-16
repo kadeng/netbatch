@@ -1,0 +1,41 @@
+package netbatch;
+
+enum RecordType {
+	    FILE = 0;
+	    RECORDFILE_RECORD = 1;
+	    VIDEO = 2;
+	    DATABASE_RECORD = 3;
+}
+
+enum ErrorCode {
+	    OK = 0;
+	    FILE_OPEN_FAILED = 1;
+	    TOO_LARGE = 2;
+	    INDEX_OUT_OF_BOUNDS = 3;
+	    FILE_FORMAT_ERROR = 4;
+	    INVALID_PATH = 5;
+	    NOT_IMPLEMENTED = 6;
+	    OTHER_ERROR = 7;
+}
+
+
+message RecordsRequest {
+    optional uint64 batch_id = 1;
+    optional RecordType record_type = 2 [default = FILE ];
+    required string record_source_path = 3;
+    repeated uint32 record_source_indices = 4; 
+    repeated uint32 record_indices = 5;
+}
+
+message BatchRequest {
+    required uint64 batch_id = 1;
+    repeated RecordsRequest record_requests = 2;
+}
+
+message Record {
+        required fixed32 route_id = 1;
+	required uint64 batch_id = 2;
+	optional uint32 record_index = 3;
+	optional ErrorCode error_code = 4 [default = OK];
+	optional bytes data = 5;
+}
