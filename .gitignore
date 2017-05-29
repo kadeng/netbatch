@@ -1,6 +1,7 @@
 # This file is used to ignore files which are generated
 # ----------------------------------------------------------------------------
-
+build
+build-clang
 *~
 *.autosave
 *.a
@@ -71,3 +72,4 @@ Thumbs.db
 *.dll
 *.exe
 
+CMakeLists.txt.user

@@ -34,7 +34,7 @@ struct record_data {
     char *start;
     char *end;
 
-    record_data(char *start, char *end) : end(end), start(start) {}
+    record_data(char *start, char *end) : start(start),end(end) {}
 };
 
 class RecordfileReader {
@@ -57,7 +57,7 @@ class RecordfileReader {
         }
 
     public:
-        RecordfileReader(const string &basepath) : basepath(basepath), is_open(false), rcount(0) {
+        RecordfileReader(const string &basepath) : basepath(basepath), rcount(0),is_open(false) {
         }
 
         ~RecordfileReader() {
@@ -117,7 +117,7 @@ class RecordfileReader {
                 return false;
             }
 
-            int mmap_flags = MAP_PRIVATE;
+            int mmap_flags = MAP_SHARED; // Compare against MAP_PRIVATE, just in case there's a performance differe
             if (pre_populate) {
                 mmap_flags |= MAP_POPULATE;
             }
@@ -182,9 +182,11 @@ struct NetBatchRequest {
 
 struct NetbatchServer {
     string server_url;
+    string broadcast_url;
     string basepath;
     size_t max_record_size;
     mutex server_mutex;
+
     TQueue<const RecordsRequest*> fqueue;
     TQueue<shared_ptr<Record>> response_queue;
     map<uint32_t, shared_ptr<NetBatchRequest>> requested_batches;
@@ -221,9 +223,6 @@ class BatchRequestAcceptor {
 
 
         void start() {
-            {
-                cout << "Starting batch request acceptor, listening at " << netbatch.server_url << endl;
-            }
             sock = new nn::socket(AF_SP, NN_REP);
             sock->bind(netbatch.server_url.c_str());
             while(1) {
@@ -278,15 +277,9 @@ class RecordRequestWorker {
         }
 
         void start() {
-            {
-                cout << "Starting batch request consumer" << endl;
-            }
-
-
-
             while(1) {
                 const RecordsRequest *rreq = netbatch.fqueue.pop();
-                cout << "Received records request in thread " << std::this_thread::get_id() << endl;
+                //cout << "Received records request in thread " << std::this_thread::get_id() << endl;
                 handleRecordsRequest(rreq);
             }
         }
@@ -349,7 +342,7 @@ class RecordRequestWorker {
                         recfile = netbatch.recordfiles[rreq->record_source_path()];
                     }
                 }
-                if (recfile && recfile->open_recordfile(false)) {
+                if (recfile && recfile->open_recordfile(true)) {
                     for (int i=0;i<rreq->record_source_indices_size();i++) {
                         auto rec = make_shared<Record>();
                         rec->set_batch_id(rreq->batch_id());
@@ -370,14 +363,13 @@ class RecordRequestWorker {
                         } else {
                             rec->set_error_code(ErrorCode::INDEX_OUT_OF_BOUNDS);
                         }
-                        if (rreq->record_source_indices_size()>i) {
-                            rec->set_record_index(rreq->record_source_indices(i));
+                        if (rreq->record_indices_size()>i) {
+                            rec->set_record_index(rreq->record_indices(i));
                         } else {
                              rec->set_record_index(i);
                         }
 
                         netbatch.response_queue.push(rec);
-                        cout << "1 Pushed response " << netbatch.response_queue.size() << endl;
                     }
                 } else {
 
@@ -395,7 +387,6 @@ class RecordRequestWorker {
                             rec->set_error_code(ErrorCode::INVALID_PATH);
                         }
                         netbatch.response_queue.push(rec);
-                        cout << "2 Pushed response " << netbatch.response_queue.size() << endl;
                     }
                 }
 
@@ -411,7 +402,6 @@ class RecordRequestWorker {
                     }
                     rec->set_error_code(ErrorCode::NOT_IMPLEMENTED);
                     netbatch.response_queue.push(rec);
-                    cout << "3 Pushed response " << netbatch.response_queue.size() << endl;
                 }
 
             }
@@ -426,53 +416,50 @@ class RecordRequestWorker {
 
 };
 
-class BatchRequestProducer {
-        string server_url;
-        nn::socket *sock;
+class BatchRecordBroadcaster {
+    nn::socket *sock;
+    NetbatchServer &netbatch;
 
+public:
+    BatchRecordBroadcaster(NetbatchServer &netbatch) : sock(nullptr),netbatch(netbatch) {
+    }
 
-    public:
+    void start() {
+        sock = new nn::socket(AF_SP, NN_PUB);
+        sock->bind(netbatch.broadcast_url.c_str());
+    }
 
-        BatchRequestProducer(string server_url) : server_url(server_url), sock(nullptr) {
-        }
+    // Make this callable
+    void operator()() {
+        broadcast();
+    }
 
-        virtual ~BatchRequestProducer() {
-
-        }
-
-
-        void close() {
-            if (sock!=nullptr)  {
-                sock->shutdown(0);
-            }
-            sock = nullptr;
-        }
-
-        void connect() {
+    void broadcast() {
+        while(1) {
+            bool ser_success = false;
             {
-                cout << "Connecting batch request producer to " << server_url << endl;
-            }
-            sock = new nn::socket(AF_SP, NN_REQ);
-            sock->connect(server_url.c_str());
-        }
-
-        void produce(BatchRequest &req) {
-                const string data = req.SerializeAsString();
-                int ret = sock->send(data.c_str(), data.length(), 0);
-
-                if (ret>0) {
-                    char response[4];
-                    int ret = sock->recv(response, 10, 0);
-                    if (ret>0) {
-                        cout << "Response Code " << ((int)response[0]) << endl;
-                    } else {
-                        cout << "Error Code " << ret << endl;
+                auto rec = netbatch.response_queue.pop();
+                size_t len = rec->ByteSize();
+                void *nnbuf = nn_allocmsg(len, 0);
+                //void *nnbuf = malloc(len);
+                if (nnbuf!=nullptr) {
+                    rec->SerializeWithCachedSizesToArray((::google::protobuf::uint8*) nnbuf);
+                    sock->send(&nnbuf, NN_MSG, 0); // Deallocates buffer after send, zero-copy op
+                    //sock->send(nnbuf, len, 0);
+                    //free(nnbuf);
+                    //cout << "Sent " << len << " bytes " << endl;
+                    if (rec->error_code()!=ErrorCode::OK) {
+                        cout << "Error Packet Debug " << rec->DebugString() << endl;
                     }
+                } else {
+                    cerr << "CRITICAL: Send buffer allocation failed" << endl;
                 }
+            }
         }
-
+    }
 
 };
+
 
 static NetbatchServer nb;
 
@@ -494,6 +481,7 @@ int main(int argc, const char *argv[])
 
     // add some arguments to search for
     parser.addArgument("-u", "--url", 1, false);
+    parser.addArgument("-b", "--broadcast_url", 1, false);
     parser.addArgument("-n", "--nthreads", 1, true);
     parser.addFinalArgument("basedir");
 
@@ -502,6 +490,8 @@ int main(int argc, const char *argv[])
 
     // if we get here, the configuration is valid
     nb.server_url = parser.retrieve<string>("url");
+    nb.broadcast_url = parser.retrieve<string>("broadcast_url");
+
     nb.set_basepath(parser.retrieve<string>("basedir"));
     nb.max_record_size = 1024*1024*10;
     int nthreads = atoi(parser.retrieve<string>("nthreads").c_str());
@@ -509,47 +499,24 @@ int main(int argc, const char *argv[])
         cerr << "Number of threads set to invalid value. Must be from 1 to 100" << endl;
         return -1;
     }
-    cout << "Starting netbatch server - serving from " + nb.basepath + " over "+nb.server_url << endl;
+    {
+        cout << "Starting netbatch server" << endl
+             << "\tServing from " << nb.basepath << endl
+             << "\tAccepting requests at " << nb.server_url << endl
+             << "\tBroadcasting batches at " << nb.broadcast_url << endl;
+    }
     vector<std::thread*> worker_threads;
     for (int i=0;i<nthreads;i++) {
         worker_threads.push_back(new thread(request_consumer));
     }
     std::thread request_acceptor_thread(request_acceptor);
 
-    BatchRequestProducer prod(nb.server_url);
-    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-    prod.connect();
-    for (int i=0;i<10;i++) {
-        BatchRequest breq;
-        breq.set_batch_id(10+i);
-        RecordsRequest *rr = breq.add_record_requests();
-        rr->set_batch_id(10+i);
-        rr->set_record_source_path("tst.txt");
-        rr->set_record_type(RecordType::FILE);
-        rr->add_record_indices(i);
-        rr = breq.add_record_requests();
-        rr->set_batch_id(10+i);
-        rr->set_record_source_path("netbatch");
-        rr->set_record_type(RecordType::RECORDFILE_RECORD);
-        rr->add_record_source_indices(0);
-        rr->add_record_indices(0);
-        rr->add_record_source_indices(1);
-        rr->add_record_indices(1);
-        rr->add_record_source_indices(2);
-        rr->add_record_indices(2);
-        prod.produce(breq);
+    BatchRecordBroadcaster broadcaster(nb);
+    broadcaster.start();
+    vector<thread> broadcasters;
+    for (int i=0;i<nthreads-1;i++) {
+        worker_threads.push_back(new thread(broadcaster));
     }
-    rqize = nb.response_queue.size();
-    cout << "Finished sending requests " << rqize << endl;
-    //std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-    while (true) {
-        //int q = (int) nb.response_queue.size();
-        auto rec = nb.response_queue.pop();
-        //cout << "Have rec" << endl;
-        cout << rec->DebugString() << endl;
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    }
-    cout << "Finishing .." << endl;
-    request_acceptor_thread.join();
+    broadcaster();
     return EXIT_SUCCESS;
 }
