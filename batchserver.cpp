@@ -226,11 +226,16 @@ class BatchRequestAcceptor {
         void start() {
             sock = new nn::socket(AF_SP, NN_REP);
             int nodelay = 1;
-            sock->setsockopt(NN_TCP, NN_TCP_NODELAY, (char*) &nodelay,
-                             sizeof (nodelay));
-            int rcvbufsize = 1024*1024*8;
-            sock->setsockopt(NN_REP, NN_RCVBUF, (char*) &rcvbufsize,
-                             sizeof (rcvbufsize));
+            try {
+                sock->setsockopt(NN_TCP, NN_TCP_NODELAY, (char*) &nodelay,
+                                 sizeof (nodelay));
+                int rcvbufsize = 1024*1024*8;
+                sock->setsockopt(NN_SOL_SOCKET, NN_RCVBUF, (char*) &rcvbufsize,
+                                 sizeof (rcvbufsize));
+            } catch(nn::exception &e) {
+                cerr << e.what() << endl;
+                exit(-1);
+            }
 
             sock->bind(netbatch.server_url.c_str());
             while(1) {
@@ -438,7 +443,7 @@ public:
         sock->setsockopt(NN_TCP, NN_TCP_NODELAY, (char*) &nodelay,
                          sizeof (nodelay));
         int sndbufsize = 1024*1024*256;
-        sock->setsockopt(NN_PUB, NN_SNDBUF, (char*) &sndbufsize,
+        sock->setsockopt(NN_SOL_SOCKET, NN_SNDBUF, (char*) &sndbufsize,
                          sizeof (sndbufsize));
 
         sock->bind(netbatch.broadcast_url.c_str());
