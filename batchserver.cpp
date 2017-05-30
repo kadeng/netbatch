@@ -15,6 +15,7 @@
 #include <nanomsg/pubsub.h>
 #include <dlib/dir_nav.h>
 #include "nn.hpp" // Nanomsg C++ interface
+#include <nanomsg/tcp.h>
 #include "tqueue.hpp"
 #include "proto/message.pb.h"
 #include "argparse.hpp" // See https://github.com/hbristow/argparse
@@ -224,6 +225,13 @@ class BatchRequestAcceptor {
 
         void start() {
             sock = new nn::socket(AF_SP, NN_REP);
+            int nodelay = 1;
+            sock->setsockopt(NN_TCP, NN_TCP_NODELAY, (char*) &nodelay,
+                             sizeof (nodelay));
+            int rcvbufsize = 1024*1024*8;
+            sock->setsockopt(NN_REP, NN_RCVBUF, (char*) &rcvbufsize,
+                             sizeof (rcvbufsize));
+
             sock->bind(netbatch.server_url.c_str());
             while(1) {
                 void *buf = nullptr;
@@ -426,6 +434,13 @@ public:
 
     void start() {
         sock = new nn::socket(AF_SP, NN_PUB);
+        int nodelay = 1;
+        sock->setsockopt(NN_TCP, NN_TCP_NODELAY, (char*) &nodelay,
+                         sizeof (nodelay));
+        int sndbufsize = 1024*1024*256;
+        sock->setsockopt(NN_PUB, NN_SNDBUF, (char*) &sndbufsize,
+                         sizeof (sndbufsize));
+
         sock->bind(netbatch.broadcast_url.c_str());
     }
 

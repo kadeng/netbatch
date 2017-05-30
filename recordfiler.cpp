@@ -98,7 +98,7 @@ int main(int argc, const char *argv[])
                 streamsize oldirfpos = irf.tellp();
                 irf.write((const char*) &newpos, sizeof(streamsize));
                 pos = newpos;
-                cout << "Wrote " << sourcedir << " into " << resultpath << ".rec" << endl;
+                cout << "Wrote " << files[i].full_name() << " into " << resultpath << ".rec" << endl;
 
             } else {
                 cout << "Failed to open " << files[i].full_name() << " for reading" << endl;
