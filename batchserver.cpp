@@ -40,7 +40,6 @@ struct record_data {
 
 class RecordfileReader {
 
-    const string basepath;
     unsigned int rcount;
     streamsize* index;
     char *data_mmap;
@@ -58,6 +57,8 @@ class RecordfileReader {
         }
 
     public:
+        const string basepath;
+
         RecordfileReader(const string &basepath) : basepath(basepath), rcount(0),is_open(false) {
         }
 
@@ -396,6 +397,7 @@ class RecordRequestWorker {
                         }
                         if (recfile) {
                             rec->set_error_code(ErrorCode::FILE_OPEN_FAILED);
+                            cerr << "Failed to open " << recfile->basepath << endl;
                         } else {
                             rec->set_error_code(ErrorCode::INVALID_PATH);
                         }
