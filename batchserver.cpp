@@ -12,10 +12,11 @@
 #include <iostream>
 #include <chrono>
 #include <nanomsg/reqrep.h>
+#include <nanomsg/pair.h>
 #include <nanomsg/pubsub.h>
+#include <nanomsg/tcp.h>
 #include <dlib/dir_nav.h>
 #include "nn.hpp" // Nanomsg C++ interface
-#include <nanomsg/tcp.h>
 #include "tqueue.hpp"
 #include "proto/message.pb.h"
 #include "argparse.hpp" // See https://github.com/hbristow/argparse
@@ -30,6 +31,13 @@
 
 using namespace std;
 using namespace netbatch;
+
+
+mutex dlog_mutex;
+
+//#define DLOG(msg) { unique_lock<mutex> dlog_lock(dlog_mutex); cerr << "THREAD<" << std::this_thread::get_id() << ">: " << msg << endl; }
+#define DLOG(msg)
+
 
 struct record_data {
     char *start;
@@ -132,6 +140,7 @@ class RecordfileReader {
             }
             data_mmap = (char*)mmappedData;
             is_open = true;
+            DLOG("Opened recordfile " << basepath);
             return true;
         }
 
@@ -139,6 +148,7 @@ class RecordfileReader {
             if (!is_open) {
                 return;
             }
+            DLOG("Closing recordfile " << basepath);
             is_open = false;
             free(this->index);
             rcount = 0;
@@ -225,6 +235,7 @@ class BatchRequestAcceptor {
 
 
         void start() {
+            DLOG("Starting BatchRequestAcceptor at " << netbatch.server_url);
             sock = new nn::socket(AF_SP, NN_REP);
             int nodelay = 1;
             try {
@@ -241,15 +252,19 @@ class BatchRequestAcceptor {
             sock->bind(netbatch.server_url.c_str());
             while(1) {
                 void *buf = nullptr;
+                DLOG("BatchRequestAcceptor waiting for batch request");
                 int ret = sock->recv(&buf, NN_MSG, 0);
+                DLOG("BatchRequestAcceptor obtained batch request");
                 if (ret>0) {
                     NNBuffer nnbuf(buf, ret);
                     auto netbatch_request = make_shared<NetBatchRequest>();
                     if (netbatch_request->batch_request.ParseFromArray(nnbuf.pointer(), nnbuf.length())) {
-
+                        DLOG("BatchRequestAcceptor.lock server_mutex 1");
                         {
                             unique_lock<mutex> lock(netbatch.server_mutex);
+                            DLOG("BatchRequestAcceptor.lock server_mutex 2");
                             if (netbatch.requested_batches[netbatch_request->batch_request.batch_id()]) {
+                                DLOG("BatchRequestAcceptor.unlock server_mutex 1");
                                 lock.unlock();
                                 // Duplicate request
                                 cerr << "Duplicate request for batch id " << netbatch_request->batch_request.batch_id();
@@ -258,18 +273,24 @@ class BatchRequestAcceptor {
                             } else {
                                 BatchRequest &br = netbatch_request->batch_request;
                                 netbatch.requested_batches[br.batch_id()] = netbatch_request;
+                                DLOG("BatchRequestAcceptor.unlock server_mutex 2");
                                 lock.unlock();
                                 for (int j=0;j<br.record_requests_size();j++) {
                                     RecordsRequest *rr = br.mutable_record_requests(j);
                                     rr->set_batch_id(br.batch_id());
                                     netbatch.fqueue.push(rr);
                                 }
+                                DLOG("BatchRequestAcceptor send response 0");
                                 sock->send("\0", 1, 0);
+                                DLOG("BatchRequestAcceptor sent response 0");
                             }
+                            DLOG("Batch Request Acceptor leaving lock scope");
                         }
 
                     } else {
+                        DLOG("BatchRequestAcceptor send response 1");
                         sock->send("\1", 1, 0);
+                        DLOG("BatchRequestAcceptor send response 1");
                     }
                 }
             }
@@ -292,8 +313,9 @@ class RecordRequestWorker {
 
         void start() {
             while(1) {
+                DLOG("Waiting for records request");
                 const RecordsRequest *rreq = netbatch.fqueue.pop();
-                //cout << "Received records request in thread " << std::this_thread::get_id() << endl;
+                DLOG("Received records request");
                 handleRecordsRequest(rreq);
             }
         }
@@ -305,7 +327,9 @@ class RecordRequestWorker {
             if (!breq) {
                 throw std::runtime_error("Fatal error, no batch request for records request");
             }
+
             if (rreq->record_type()==RecordType::FILE) {
+                DLOG("Handling FILE record request");
                 auto rec = make_shared<Record>();
                 rec->set_batch_id(rreq->batch_id());
 
@@ -341,6 +365,7 @@ class RecordRequestWorker {
                 netbatch.response_queue.push(std::move(rec));
 
             }  else if (rreq->record_type()==RecordType::RECORDFILE_RECORD) {
+                DLOG("Handling RECORDFILE record request for " << rreq->record_source_indices_size() << " records");
                 // We return one record for each record index
                 shared_ptr<RecordfileReader> recfile;
                 string::size_type spos = rreq->record_source_path().find("..");
@@ -357,6 +382,7 @@ class RecordRequestWorker {
                     }
                 }
                 if (recfile && recfile->open_recordfile(true)) {
+                    DLOG("Opened ( or re-used) recordfile " << rreq->record_source_path())
                     for (int i=0;i<rreq->record_source_indices_size();i++) {
                         auto rec = make_shared<Record>();
                         rec->set_batch_id(rreq->batch_id());
@@ -366,15 +392,20 @@ class RecordRequestWorker {
                             record_data data = recfile->at(src_idx);
                             if (data.start!=nullptr && data.end>data.start) {
                                 ptrdiff_t len = (ptrdiff_t) (data.end-data.start);
+                                DLOG("Record " << i << " Length " << len);
                                 if (len>0 && len<netbatch.max_record_size) {
                                     rec->set_data(data.start, len);
                                 } else {
+                                    DLOG("Record " << i << " TOO LARGE");
                                     rec->set_error_code(ErrorCode::TOO_LARGE);
                                 }
                             } else {
+                                DLOG("Record " << i << " OTHER ERROR");
                                 rec->set_error_code(ErrorCode::OTHER_ERROR);
                             }
                         } else {
+                            DLOG("Record " << i << " INDEX OUT OF BOUNDS");
+
                             rec->set_error_code(ErrorCode::INDEX_OUT_OF_BOUNDS);
                         }
                         if (rreq->record_indices_size()>i) {
@@ -382,7 +413,7 @@ class RecordRequestWorker {
                         } else {
                              rec->set_record_index(i);
                         }
-
+                        DLOG("Record " << rreq->record_source_path() << "[" << i << "] Pushing to Response Queue");
                         netbatch.response_queue.push(rec);
                     }
                 } else {
@@ -401,11 +432,14 @@ class RecordRequestWorker {
                         } else {
                             rec->set_error_code(ErrorCode::INVALID_PATH);
                         }
+                        DLOG("File Open/Path Error Record " << rreq->record_source_path() << "[" << i << "] Pushing to Response Queue");
                         netbatch.response_queue.push(rec);
                     }
                 }
 
             } else {
+                DLOG("Record type not implemented");
+
                 // We return one record for each record index
                 for (int i=0;i<rreq->record_source_indices_size();i++) {
                     auto rec = make_shared<Record>();
@@ -420,10 +454,12 @@ class RecordRequestWorker {
                 }
 
             }
+            DLOG("Marking request " << rreq->batch_id() << " " << rreq->record_source_path() << " as completed");
             {
                 unique_lock<mutex> lock_(netbatch.server_mutex);
                 breq->completed_requests++;
                 if (breq->completed_requests>=breq->batch_request.record_requests_size()) {
+                        DLOG("Finalized BATCH REQUEST " << rreq->batch_id());
                         netbatch.requested_batches[rreq->batch_id()] = nullptr; // Ensures it gets deleted, unless we have another owner..
                 }
             }
@@ -440,7 +476,7 @@ public:
     }
 
     void start() {
-        sock = new nn::socket(AF_SP, NN_PUB);
+        sock = new nn::socket(AF_SP, NN_PAIR);
         int nodelay = 1;
         sock->setsockopt(NN_TCP, NN_TCP_NODELAY, (char*) &nodelay,
                          sizeof (nodelay));
@@ -460,18 +496,24 @@ public:
         while(1) {
             bool ser_success = false;
             {
+                DLOG("Broadcaster - waiting for response packet");
                 auto rec = netbatch.response_queue.pop();
+                DLOG("Broadcaster - obtained response packet");
                 size_t len = rec->ByteSize();
                 void *nnbuf = nn_allocmsg(len, 0);
+                DLOG("Broadcaster - message of len " << len << " allocated");
                 //void *nnbuf = malloc(len);
                 if (nnbuf!=nullptr) {
+
                     rec->SerializeWithCachedSizesToArray((::google::protobuf::uint8*) nnbuf);
-                    sock->send(&nnbuf, NN_MSG, 0); // Deallocates buffer after send, zero-copy op
+                    DLOG("Broadcaster - sending message batch id " << rec->batch_id() << " record index " << rec->record_index());
+                    int rc = sock->send(&nnbuf, NN_MSG, 0); // Deallocates buffer after send, zero-copy op
+                    DLOG("Broadcaster - sent message batch id " << rec->batch_id() << " record index " << rec->record_index() << " code " << rc);
                     //sock->send(nnbuf, len, 0);
                     //free(nnbuf);
                     //cout << "Sent " << len << " bytes " << endl;
                     if (rec->error_code()!=ErrorCode::OK) {
-                        cout << "Error Packet Debug " << rec->DebugString() << endl;
+                        DLOG("Error Packet Debug " << rec->DebugString());
                     }
                 } else {
                     cerr << "CRITICAL: Send buffer allocation failed" << endl;

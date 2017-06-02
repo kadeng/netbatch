@@ -11,7 +11,7 @@ INCLUDE_DIRECTORIES(${CMAKE_CURRENT_BINARY_DIR})
 
 
 FIND_PACKAGE(Protobuf REQUIRED)
-ADD_CUSTOM_TARGET(${PROJECT_NAME} DEPENDS batchserver pyproto)
+ADD_CUSTOM_TARGET(${PROJECT_NAME} DEPENDS batchserver pyproto recordfiler)
 
 ADD_EXECUTABLE( batchserver
                 "batchserver.cpp"
@@ -20,6 +20,7 @@ ADD_EXECUTABLE( batchserver
 ADD_EXECUTABLE( recordfiler
                           "recordfiler.cpp"
                         )
+
 
 TARGET_LINK_LIBRARIES(  batchserver
                         nanomsg
