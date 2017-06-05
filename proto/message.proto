@@ -7,6 +7,12 @@ enum RecordType {
 	    DATABASE_RECORD = 3;
 }
 
+enum RequestType {
+	    RECORD_BATCH = 1;
+	    LISTINGS = 2;
+}
+
+
 enum ErrorCode {
 	    OK = 0;
 	    FILE_OPEN_FAILED = 1;
@@ -27,9 +33,39 @@ message RecordsRequest {
     repeated uint32 record_indices = 5;
 }
 
+message ListingRequest {
+    required string path = 1;
+    optional string file_extension = 2;
+    optional bool list_files = 3 [default = true ];
+    optional bool list_dirs = 4 [default = true ];
+    optional bool recurse = 5 [default = false ];
+}
+
+message FileInfo {
+	required string path = 1;
+	required uint64 size = 2;
+}
+
+message ListingResponse {
+    required ListingRequest request = 1;
+    repeated FileInfo files = 2;
+    repeated string dirs = 3;
+}
+
+enum BatchResponseCode {
+	ACCEPTED = 0;
+	ERROR = 1;
+}
+
+message BatchResponse {
+    required BatchResponseCode code = 1 [default = ACCEPTED];
+    repeated ListingResponse listing_response = 2;
+}
+
 message BatchRequest {
     required uint64 batch_id = 1;
     repeated RecordsRequest record_requests = 2;
+    repeated ListingRequest listing_requests = 3;
 }
 
 message Record {

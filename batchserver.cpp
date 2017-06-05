@@ -27,6 +27,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/stat.h>
+
 #include <assert.h>
 
 using namespace std;
@@ -44,6 +45,30 @@ struct record_data {
     char *end;
 
     record_data(char *start, char *end) : start(start),end(end) {}
+};
+
+
+struct FileFilter {
+    const string &extension;
+    bool accept_hidden;
+
+    FileFilter(const std::string &extension, bool accept_hidden) : accept_hidden(accept_hidden), extension(extension){
+
+    }
+
+    bool operator()(dlib::file &f) const {
+        if (f.name().size()==0) {
+            return false;
+        }
+        if (!accept_hidden && f.name()[0]=='.') {
+            return false;
+        }
+        if (extension.size()>0) {
+            return f.name().rfind(extension) == f.name().size()-extension.size();
+        }
+        return true;
+    }
+
 };
 
 class RecordfileReader {
@@ -233,6 +258,73 @@ class BatchRequestAcceptor {
         virtual ~BatchRequestAcceptor() {
 		}
 
+        void sendSimpleResponse(netbatch::BatchResponseCode response_code) {
+            netbatch::BatchResponse response;
+            response.set_code(response_code);
+            size_t len = response.ByteSize();
+            void *nnbuf = nn_allocmsg(len, 0);
+            if (nnbuf!=nullptr) {
+                response.SerializeWithCachedSizesToArray((::google::protobuf::uint8*) nnbuf);
+                int rc = sock->send(&nnbuf, NN_MSG, 0); // Deallocates buffer after send, zero-copy op
+            } else {
+                cerr << "CRITICAL: Send buffer allocation failed (2)" << endl;
+            }
+
+        }
+
+
+
+        void sendResponseAndListing(netbatch::BatchResponseCode response_code, const BatchRequest &request) {
+            netbatch::BatchResponse response;
+            response.set_code(response_code);
+            fillInDirectoryListing(response, request);
+            size_t len = response.ByteSize();
+            void *nnbuf = nn_allocmsg(len, 0);
+            if (nnbuf!=nullptr) {
+                response.SerializeWithCachedSizesToArray((::google::protobuf::uint8*) nnbuf);
+                int rc = sock->send(&nnbuf, NN_MSG, 0); // Deallocates buffer after send, zero-copy op
+            } else {
+                cerr << "CRITICAL: Send buffer allocation failed (2)" << endl;
+            }
+
+        }
+
+        void fillInDirectoryListing(netbatch::BatchResponse response, const BatchRequest &request)
+        {
+            for (unsigned int i=0;i<request.listing_requests_size();i++) {
+                const ListingRequest &lreq = request.listing_requests(i);
+                ListingResponse *lres = response.add_listing_response();
+                lres->set_allocated_request(new ListingRequest(lreq));
+                if (lreq.path().find(".")==string::npos) {
+                    dlib::directory topdir(netbatch.basepath + lreq.path());
+                    vector<dlib::directory> subdirs;
+                    vector<dlib::file> files;
+                    if (lreq.recurse()) {
+                        vector<dlib::directory> temp;
+                        dlib::get_files_in_directory_tree(topdir, FileFilter(lreq.file_extension(), false), 6);
+                        dlib::implementation_details::get_all_sub_dirs(topdir, 6, subdirs, temp);
+                    } else {
+                        topdir.get_files(files);
+                        topdir.get_dirs(subdirs);
+                    }
+                    sort(files.begin(), files.end());
+                    sort(subdirs.begin(), subdirs.end());
+
+                    for (unsigned int j=0;j<subdirs.size();j++) {
+                        lres->mutable_dirs()->AddAllocated(new string(subdirs[j].full_name().substr(netbatch.basepath.size())));
+                    }
+                    const size_t lfsize = lreq.file_extension().size();
+                    for (unsigned int j=0;j<files.size();j++) {
+                        const string &fname = files[j].name();
+                        if (fname.size()>lfsize && fname.find(lreq.file_extension(), fname.size()-lfsize)!=string::npos) {
+                            FileInfo *fi = lres->mutable_files()->Add();
+                            fi->set_path(files[j].full_name().substr(netbatch.basepath.size()));
+                            fi->set_size(files[j].size());
+                        }
+                    }
+                }
+            }
+        }
 
         void start() {
             DLOG("Starting BatchRequestAcceptor at " << netbatch.server_url);
@@ -259,38 +351,44 @@ class BatchRequestAcceptor {
                     NNBuffer nnbuf(buf, ret);
                     auto netbatch_request = make_shared<NetBatchRequest>();
                     if (netbatch_request->batch_request.ParseFromArray(nnbuf.pointer(), nnbuf.length())) {
-                        DLOG("BatchRequestAcceptor.lock server_mutex 1");
-                        {
-                            unique_lock<mutex> lock(netbatch.server_mutex);
-                            DLOG("BatchRequestAcceptor.lock server_mutex 2");
-                            if (netbatch.requested_batches[netbatch_request->batch_request.batch_id()]) {
-                                DLOG("BatchRequestAcceptor.unlock server_mutex 1");
-                                lock.unlock();
-                                // Duplicate request
-                                cerr << "Duplicate request for batch id " << netbatch_request->batch_request.batch_id();
-                                sock->send("\2", 1, 0);
-                                continue;
-                            } else {
-                                BatchRequest &br = netbatch_request->batch_request;
-                                netbatch.requested_batches[br.batch_id()] = netbatch_request;
-                                DLOG("BatchRequestAcceptor.unlock server_mutex 2");
-                                lock.unlock();
-                                for (int j=0;j<br.record_requests_size();j++) {
-                                    RecordsRequest *rr = br.mutable_record_requests(j);
-                                    rr->set_batch_id(br.batch_id());
-                                    netbatch.fqueue.push(rr);
+                        if (netbatch_request->batch_request.record_requests_size()>0) {
+                            DLOG("BatchRequestAcceptor.lock server_mutex 1");
+                            {
+                                unique_lock<mutex> lock(netbatch.server_mutex);
+                                DLOG("BatchRequestAcceptor.lock server_mutex 2");
+                                if (netbatch.requested_batches[netbatch_request->batch_request.batch_id()]) {
+                                    DLOG("BatchRequestAcceptor.unlock server_mutex 1");
+                                    lock.unlock();
+                                    // Duplicate request
+                                    cerr << "Duplicate request for batch id " << netbatch_request->batch_request.batch_id() << endl;
+                                    sendResponseAndListing(BatchResponseCode::ERROR, netbatch_request->batch_request );
+                                    //sock->send("\2", 1, 0);
+                                    continue;
+                                } else {
+                                    BatchRequest &br = netbatch_request->batch_request;
+                                    netbatch.requested_batches[br.batch_id()] = netbatch_request;
+                                    DLOG("BatchRequestAcceptor.unlock server_mutex 2");
+                                    lock.unlock();
+                                    for (int j=0;j<br.record_requests_size();j++) {
+                                        RecordsRequest *rr = br.mutable_record_requests(j);
+                                        rr->set_batch_id(br.batch_id());
+                                        netbatch.fqueue.push(rr);
+                                    }
+                                    DLOG("BatchRequestAcceptor send response 0");
+                                    sendResponseAndListing(BatchResponseCode::ACCEPTED, netbatch_request->batch_request);
+                                    //sock->send("\0", 1, 0);
+                                    DLOG("BatchRequestAcceptor sent response 0");
                                 }
-                                DLOG("BatchRequestAcceptor send response 0");
-                                sock->send("\0", 1, 0);
-                                DLOG("BatchRequestAcceptor sent response 0");
+                                DLOG("Batch Request Acceptor leaving lock scope");
                             }
-                            DLOG("Batch Request Acceptor leaving lock scope");
+                        } else {
+                            // For directory listing only, we don't need to enter the lock, so we don't ..
+                            sendResponseAndListing(BatchResponseCode::ACCEPTED, netbatch_request->batch_request);
                         }
-
                     } else {
-                        DLOG("BatchRequestAcceptor send response 1");
-                        sock->send("\1", 1, 0);
-                        DLOG("BatchRequestAcceptor send response 1");
+                        DLOG("BatchRequestAcceptor send response ERROR");
+                        sendSimpleResponse(BatchResponseCode::ERROR);
+                        DLOG("BatchRequestAcceptor sent response ERROR");
                     }
                 }
             }
