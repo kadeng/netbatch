@@ -15,6 +15,7 @@
 #include <nanomsg/pair.h>
 #include <nanomsg/pubsub.h>
 #include <nanomsg/tcp.h>
+#include <nanomsg/pipeline.h>
 #include <dlib/dir_nav.h>
 #include "nn.hpp" // Nanomsg C++ interface
 #include "tqueue.hpp"
@@ -289,11 +290,13 @@ class BatchRequestAcceptor {
 
         }
 
-        void fillInDirectoryListing(netbatch::BatchResponse response, const BatchRequest &request)
+        void fillInDirectoryListing(netbatch::BatchResponse &response, const BatchRequest &request)
         {
+            DLOG("Directory Listing of " << request.listing_requests_size() << " paths");
             for (unsigned int i=0;i<request.listing_requests_size();i++) {
                 const ListingRequest &lreq = request.listing_requests(i);
                 ListingResponse *lres = response.add_listing_response();
+                DLOG("Added Listing Response - now filling in data");
                 lres->set_allocated_request(new ListingRequest(lreq));
                 if (lreq.path().find(".")==string::npos) {
                     dlib::directory topdir(netbatch.basepath + lreq.path());
@@ -314,15 +317,18 @@ class BatchRequestAcceptor {
                         lres->mutable_dirs()->AddAllocated(new string(subdirs[j].full_name().substr(netbatch.basepath.size())));
                     }
                     const size_t lfsize = lreq.file_extension().size();
+                    auto mfiles = lres->mutable_files();
                     for (unsigned int j=0;j<files.size();j++) {
                         const string &fname = files[j].name();
                         if (fname.size()>lfsize && fname.find(lreq.file_extension(), fname.size()-lfsize)!=string::npos) {
-                            FileInfo *fi = lres->mutable_files()->Add();
+                            FileInfo *fi = mfiles->Add();
                             fi->set_path(files[j].full_name().substr(netbatch.basepath.size()));
                             fi->set_size(files[j].size());
                         }
                     }
+
                 }
+
             }
         }
 
@@ -383,7 +389,9 @@ class BatchRequestAcceptor {
                             }
                         } else {
                             // For directory listing only, we don't need to enter the lock, so we don't ..
+                            DLOG("BatchRequestAcceptor DIR LIST ONLY");
                             sendResponseAndListing(BatchResponseCode::ACCEPTED, netbatch_request->batch_request);
+                            DLOG("BatchRequestAcceptor DIR LIST ONLY DONE");
                         }
                     } else {
                         DLOG("BatchRequestAcceptor send response ERROR");
@@ -574,7 +582,7 @@ public:
     }
 
     void start() {
-        sock = new nn::socket(AF_SP, NN_PAIR);
+        sock = new nn::socket(AF_SP, NN_PUSH);
         int nodelay = 1;
         sock->setsockopt(NN_TCP, NN_TCP_NODELAY, (char*) &nodelay,
                          sizeof (nodelay));

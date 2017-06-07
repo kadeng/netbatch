@@ -1,9 +1,13 @@
 # This file is used to ignore files which are generated
 # ----------------------------------------------------------------------------
+nsight-project
 build
+build-release
 build-clang
 *~
 *.autosave
+.cproject
+.project
 *.a
 *.core
 *.moc
