@@ -24,6 +24,13 @@ pub.setsockopt(nnpy.SOL_SOCKET, 16, 1024*1024*300)
 #pub.setsockopt(nnpy.TCP, nnpy.TCP_NODELAY, 1)
 #pub.connect('tcp://127.0.0.1:9878')
 pub.connect('ipc:///tmp/imgpipe.sock')
+
+def tensor_to_numpy_hsv(img_tensor):
+    buffer = img_tensor.numpy()
+    b2 = buffer.transpose()
+    bufferhsv = cv2.cvtColor(b2, cv2.COLOR_RGB2HSV)
+    return bufferhsv
+
 normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                      std=[0.229, 0.224, 0.225])
 img_transforms = transforms.Compose([
@@ -32,6 +39,7 @@ img_transforms = transforms.Compose([
             transforms.RandomHorizontalFlip(),
             transforms.ToTensor(),
             normalize,
+            tensor_to_numpy_hsv
         ])
 
 start = time.time()
@@ -49,12 +57,9 @@ while(True):
     i+=1
     if (rec.error_code==msg.OK):
         image = accimage.Image(bytes=rec.data)
-        img_tensor = img_transforms(image)
-        buffer = img_tensor.numpy() #numpy.empty([image.channels, image.height, image.width], dtype=numpy.uint8)
-        # #buffer = bytearray(256)
-        #image.copyto(buffer)
+        img_ndarr = img_transforms(image)
         rec.route_id=0
-        rec.data = buffer.tobytes()
+        rec.data = img_ndarr.tobytes()
         pub.send(rec.SerializeToString())
         okcount+=1
     else:
