@@ -338,6 +338,31 @@ void readRestartInterval(const unsigned char *pData, int &nRestartInterval)
     nRestartInterval = readAndAdvance<unsigned short>(pData);
 }
 
+class NNBuffer {
+    const void *buffer;
+    const size_t len;
+
+    public:
+        NNBuffer(void *buffer, size_t len) : buffer(buffer), len(len) {
+
+        }
+
+        ~NNBuffer() {
+            if (buffer!=nullptr) {
+                nn_freemsg(const_cast<void*>(buffer));
+            }
+        }
+
+        const void *pointer() {
+            return buffer;
+        }
+
+        const size_t length() {
+            return len;
+        }
+};
+
+
 void printHelp()
 {
     cout << "jpegNPP usage" << endl;

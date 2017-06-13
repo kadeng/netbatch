@@ -129,16 +129,22 @@ class RecordfileReader {
             size_t isize = filesize(indexfilename);
 
             if (fsize<=0 || isize<=0 || (isize % sizeof(streamsize)!=0)) {
-                return false;
+                DLOG("Error opening recordfile " << recordfilename << " due to size issues");
+            	return false;
             }
 
             rcount = isize / sizeof(streamsize);
 
             // Read index entirely into memory
             int index_fd = open(indexfilename.c_str(), O_RDONLY, 0);
-            void* midx = mmap(NULL, isize, PROT_READ, MAP_PRIVATE, index_fd, 0);
+            if (index_fd==-1) {
+            	cerr << "open failure on " << indexfilename << endl;
+            	return false;
+            }
+            void* midx = mmap(NULL, isize, PROT_READ, MAP_PRIVATE|MAP_POPULATE, index_fd, 0);
             if (midx == MAP_FAILED) {
                  close(index_fd);
+                 cerr << "MMap failure on " << indexfilename << endl;
                  return false;
             }
             this->index = (streamsize*)malloc(isize);
@@ -150,6 +156,7 @@ class RecordfileReader {
             data_fd = open(recordfilename.c_str(), O_RDONLY, 0);
             if (data_fd==-1) {
                 free(this->index);
+                cerr << "open failure on " << recordfilename << endl;
                 return false;
             }
 
@@ -162,6 +169,7 @@ class RecordfileReader {
             if (mmappedData == MAP_FAILED) {
                 free(this->index);
                 close(data_fd);
+                cerr << "MMap failure on " << recordfilename << endl;
                 return false;
             }
             data_mmap = (char*)mmappedData;
@@ -487,7 +495,7 @@ class RecordRequestWorker {
                         recfile = netbatch.recordfiles[rreq->record_source_path()];
                     }
                 }
-                if (recfile && recfile->open_recordfile(true)) {
+                if (recfile && recfile->open_recordfile(false)) {
                     DLOG("Opened ( or re-used) recordfile " << rreq->record_source_path())
                     for (int i=0;i<rreq->record_source_indices_size();i++) {
                         auto rec = make_shared<Record>();
@@ -527,8 +535,8 @@ class RecordRequestWorker {
                     for (int i=0;i<rreq->record_source_indices_size();i++) {
                         auto rec = make_shared<Record>();
                         rec->set_batch_id(rreq->batch_id());
-                        if (rreq->record_source_indices_size()>i) {
-                            rec->set_record_index(rreq->record_source_indices(i));
+                        if (rreq->record_indices_size()>i) {
+                            rec->set_record_index(rreq->record_indices(i));
                         } else {
                              rec->set_record_index(i);
                         }

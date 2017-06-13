@@ -13,12 +13,13 @@ import accimage
 sub = nnpy.Socket(nnpy.AF_SP, nnpy.PULL)
 #sub.connect('tcp://144.76.34.134:9877')
 #sub.bind('tcp://127.0.0.1:9878')
-sub.bind('ipc:///tmp/imgpipe.sock')
-
-#sub.setsockopt(nnpy.SUB, nnpy.SUB_SUBSCRIBE, b'')
 sub.setsockopt(nnpy.SOL_SOCKET, nnpy.RCVBUF, 1024*1024*300)
 sub.setsockopt(nnpy.SOL_SOCKET, 16, 1024*1024*300)
 sub.setsockopt(nnpy.TCP, nnpy.TCP_NODELAY, 1)
+
+sub.bind('ipc:///tmp/imgpipe.sock')
+
+#sub.setsockopt(nnpy.SUB, nnpy.SUB_SUBSCRIBE, b'')
 
 req = nnpy.Socket(nnpy.AF_SP, nnpy.REQ)
 req.setsockopt(nnpy.TCP, nnpy.TCP_NODELAY, 1)
@@ -27,7 +28,7 @@ req.connect('tcp://127.0.0.1:9876')
 br_init  = msg.BatchRequest()
 br_init.batch_id = 0
 lr = br_init.listing_requests.add()
-lr.path=""
+lr.path="train-recs/"
 lr.file_extension=".idx"
 lr.list_files=True
 lr.list_dirs=False
@@ -42,19 +43,22 @@ counts = []
 for f in lresp.listing_response[0].files:
     basenames.append(f.path[:-4])
     counts.append(f.size/8)
+    if (len(counts)>50):
+        break
 recordcounts = dict(zip(basenames, counts))
 
 print("Listed "+str(len(recordcounts)) + " record files")
 
 br = msg.BatchRequest()
 br.batch_id = 1
-req1 = br.record_requests.add()
-req1.record_type = 1 # Recordfile record
-n_per_class = 20
+
+n_per_class = 10
 n_total = 0
 for i,bn in enumerate(basenames):
+    req1 = br.record_requests.add()
+    req1.record_type = 1  # Recordfile record
     req1.record_source_path=bn
-    req1.record_source_indices.extend(sorted(list([int(val) for val in npr.randint(0,1299, n_per_class, np.int32)])))
+    req1.record_source_indices.extend(sorted(list([int(val) for val in npr.randint(0,recordcounts[bn], n_per_class, np.int32)])))
     req1.record_indices.extend(list(range(i*n_per_class,((i+1)*n_per_class))))
 
 #br.record_requests.extend([req1])
@@ -89,4 +93,4 @@ while(True):
 #        print("Received all records")
         break
 stop = time.time()
-print("Took %f ms - receive time %f ms, images/sec: %f, MB/sec: %f - ok: %d" % (1000.0*(stop-start), 1000.0*(stop-startrec), i/(stop-startrec), nbytes/(1024*1024*(stop-startrec)), okcount))
+print("Took %f ms - receive time %f ms, images/sec: %f, MB/sec: %f - ok: %d - total MB: %f" % (1000.0*(stop-start), 1000.0*(stop-startrec), i/(stop-startrec), nbytes/(1024*1024*(stop-startrec)), okcount, nbytes/(1024*1024)) )

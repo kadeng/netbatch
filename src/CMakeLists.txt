@@ -45,15 +45,15 @@ ADD_EXECUTABLE( recordfiler
                         
 SET (jpegNPP_files jpegNPP.cpp Endianess.h)
 
-CUDA_ADD_EXECUTABLE(jpegNPP ${jpegNPP_files})
+#CUDA_ADD_EXECUTABLE(jpegNPP ${jpegNPP_files})
 #message(${CUDA_TOOLKIT_ROOT_DIR}/samples/7_CUDALibraries/common/FreeImage/include)
 
-TARGET_INCLUDE_DIRECTORIES( jpegNPP 
-		PUBLIC ${CUDA_TOOLKIT_ROOT_DIR}/samples/7_CUDALibraries/common/FreeImage/include
-		PUBLIC ${CUDA_TOOLKIT_ROOT_DIR}/samples/7_CUDALibraries/common/UtilNPP
-		PUBLIC ${CUDA_TOOLKIT_ROOT_DIR}/samples/common/inc
-		)
-TARGET_LINK_LIBRARIES(jpegNPP ${CUDA_nppc_LIBRARY} ${CUDA_nppi_LIBRARY} nanomsg)
+#TARGET_INCLUDE_DIRECTORIES( jpegNPP
+#		PUBLIC ${CUDA_TOOLKIT_ROOT_DIR}/samples/7_CUDALibraries/common/FreeImage/include#
+#		PUBLIC ${CUDA_TOOLKIT_ROOT_DIR}/samples/7_CUDALibraries/common/UtilNPP
+#		PUBLIC ${CUDA_TOOLKIT_ROOT_DIR}/samples/common/inc
+#		)
+#TARGET_LINK_LIBRARIES(jpegNPP ${CUDA_nppc_LIBRARY} ${CUDA_nppi_LIBRARY} nanomsg)
 
 TARGET_LINK_LIBRARIES(  batchserver
                         nanomsg
