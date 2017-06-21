@@ -54,15 +54,17 @@ class NetbatchImageDataset(data.Dataset):
 
     def start_sub(self):
         sub = nnpy.Socket(nnpy.AF_SP, nnpy.PULL)
-        sub.setsockopt(nnpy.SOL_SOCKET, nnpy.RCVBUF, 1024 * 1024 * 300)
+        sub.setsockopt(nnpy.SOL_SOCKET, nnpy.RCVBUF, 1024 * 1024 * 600)
         sub.setsockopt(nnpy.SOL_SOCKET, 16, 1024 * 1024 * 300)
         sub.setsockopt(nnpy.TCP, nnpy.TCP_NODELAY, 1)
 
         sub.bind('ipc:///tmp/imgpipe.sock')
+
         self.sub = sub
         batch_recordcounts = defaultdict(lambda: 0)
         batch_shape = tuple([self.batchsize] + self.record_shape)
-        batch_arrays = defaultdict(lambda: np.zeros(batch_shape, dtype=np.float32))
+        batch_arrays = defaultdict(lambda: np.zeros(batch_shape, dtype=np.ubyte))
+        batch_indices = defaultdict(lambda: set())
 
         def receive_batches():
             print("Receiving batches")
@@ -71,23 +73,30 @@ class NetbatchImageDataset(data.Dataset):
                 rec = msg.Record()
                 rec.ParseFromString(rrec)
                 if (rec.error_code==msg.OK and rec.data is not None):
-                    b1 = np.frombuffer(rec.data, dtype=np.float32)
+                    b1 = np.frombuffer(rec.data, dtype=np.ubyte)
                     recarr = np.reshape(b1, newshape=self.record_shape)
                     batch_recordcounts[rec.batch_id] += 1
                     batch_arrays[rec.batch_id][rec.record_index,:,:,:]=recarr
+                    batch_indices[rec.batch_id].add(rec.record_index)
                 else:
+                    print("Error %r" % (rec.error_code))
                     batch_recordcounts[rec.batch_id] += 1
                     batch_arrays[rec.batch_id][rec.record_index, :, :, :] = 0.0
+                    batch_indices[rec.batch_id].add(rec.record_index)
                 if (batch_recordcounts[rec.batch_id] >= self.batchsize):
+                    print("Recordcount %d for batch %d reached - set size %d" % (batch_recordcounts[rec.batch_id],
+                                                                                 rec.batch_id, len(batch_indices[rec.batch_id])))
                     self.batch_queue.put(batch_arrays[rec.batch_id])
                     del batch_arrays[rec.batch_id]
                     del batch_recordcounts[rec.batch_id]
+                    del batch_indices[rec.batch_id]
 
         thr = threading.Thread(target=receive_batches)
+        thr.daemon = True
         thr.start()
 
     def set_batchsize(self, batchsize):
-        if (self.batchsize==batchsize and self.normweights is not None):
+        if (self.batchsize==batchsize and self.norm_weights is not None):
             return
         self.batchsize = batchsize
         self.mincount = np.zeros((len(self.weights)), dtype=np.int32)
@@ -117,8 +126,8 @@ class NetbatchImageDataset(data.Dataset):
         self.normweights=None
 
 
-    def request_batch(self, batchsize=200, nbatches=1, balance=True):
-        self.set_batchsize(batchsize)
+    def request_batch(self, nbatches=1, balance=True):
+        batchsize = self.batchsize
         if (balance):
             # We enforce a balanced dataset
             if (self.remaining_normweights is not None):
@@ -151,7 +160,6 @@ class NetbatchImageDataset(data.Dataset):
                     self.record_pos[i] = pcount
                 si = sindices[rpos:(rpos+pcount)]
                 self.record_pos[i]+=pcount
-
                 req1 = br.record_requests.add()
                 req1.record_type = 1  # Recordfile record
                 req1.record_source_path = path
@@ -162,9 +170,7 @@ class NetbatchImageDataset(data.Dataset):
             response = self.req.recv()
 
     def next_batch(self):
-        res = self.batch_queue.get()
-        self.request_batch()
-        return res
+        return self.batch_queue.get()
 
         imgs = make_dataset(root, class_to_idx)
         if len(imgs) == 0:

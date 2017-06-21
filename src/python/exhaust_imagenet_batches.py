@@ -13,12 +13,13 @@ import accimage
 sub = nnpy.Socket(nnpy.AF_SP, nnpy.PULL)
 #sub.connect('tcp://144.76.34.134:9877')
 #sub.bind('tcp://127.0.0.1:9878')
-sub.bind('ipc:///tmp/imgpipe.sock')
-
-#sub.setsockopt(nnpy.SUB, nnpy.SUB_SUBSCRIBE, b'')
 sub.setsockopt(nnpy.SOL_SOCKET, nnpy.RCVBUF, 1024*1024*300)
 sub.setsockopt(nnpy.SOL_SOCKET, 16, 1024*1024*300)
 sub.setsockopt(nnpy.TCP, nnpy.TCP_NODELAY, 1)
+sub.bind('ipc:///tmp/imgpipe.sock')
+
+#sub.setsockopt(nnpy.SUB, nnpy.SUB_SUBSCRIBE, b'')
+
 
 start = time.time()
 startrec = time.time()
