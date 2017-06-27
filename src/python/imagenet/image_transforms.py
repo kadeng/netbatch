@@ -32,3 +32,9 @@ def pil_to_numpy(img):
 def numpy_to_hsv(img_tensor):
     bufferhsv = cv2.cvtColor(img_tensor, cv2.COLOR_RGB2HSV)
     return bufferhsv
+
+def numpy_hwc_to_chw(img_tensor):
+    return img_tensor.transpose([2,0,1])
+
+def byte_to_float(img_tensor):
+    return img_tensor.astype(np.float32)/255.0

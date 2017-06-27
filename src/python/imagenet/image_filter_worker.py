@@ -1,17 +1,17 @@
 
-import nnpy
-import message_pb2 as msg
-import time
-import matplotlib.pylab as plt
-import numpy as np
-import cv2
 import accimage
+import time
+
+import nnpy
 import torchvision.transforms as transforms
-from image_transforms import AccimageToNumpy, numpy_to_hsv,RandomRotate, pil_to_numpy
+
+import message_pb2 as msg
+from imagenet.image_transforms import AccimageToNumpy, pil_to_numpy, numpy_hwc_to_chw, byte_to_float
 
 sub = nnpy.Socket(nnpy.AF_SP, nnpy.PULL)
 sub.setsockopt(nnpy.SOL_SOCKET, nnpy.RCVBUF, 1024*1024*300)
 sub.setsockopt(nnpy.SOL_SOCKET, 16, 1024*1024*300)
+sub.setsockopt(nnpy.SOL_SOCKET, nnpy.RCVTIMEO, 1000*10)
 sub.setsockopt(nnpy.TCP, nnpy.TCP_NODELAY, 1)
 
 #sub.connect('tcp://144.76.34.134:9877')
@@ -22,16 +22,28 @@ pub.setsockopt(nnpy.SOL_SOCKET, 16, 1024*1024*300)
 #pub.setsockopt(nnpy.TCP, nnpy.TCP_NODELAY, 1)
 #pub.connect('tcp://127.0.0.1:9878')
 pub.connect('ipc:///tmp/imgpipe.sock')
+normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                     std=[0.229, 0.224, 0.225])
+
+def normimg(img):
+    img[0,:,:] = (img[0,:,:]-0.485) / 0.229
+    img[1, :, :] = (img[0, :, :] - 0.456) / 0.224
+    img[2, :, :] = (img[0, :, :] - 0.406) / 0.225
+    return img
+
 
 img_transforms = transforms.Compose([
             AccimageToNumpy(),
             transforms.ToPILImage(),
-            RandomRotate(-5, 5),
+            #RandomRotate(-3, 2),
             transforms.Scale(244),
-            transforms.RandomCrop(224),
+            transforms.RandomSizedCrop(224),
             transforms.RandomHorizontalFlip(),
             pil_to_numpy,
-            numpy_to_hsv
+            #numpy_to_hsv,
+            numpy_hwc_to_chw,
+            byte_to_float,
+            normimg
         ])
 
 start = time.time()
@@ -41,7 +53,15 @@ nbytes = 0
 okcount = 0
 print("Working ...")
 while(True):
-    recd = sub.recv()
+    while True:
+        try:
+            recd = sub.recv()
+            break
+        except nnpy.NNError as e:
+            if (e.error_no==nnpy.ETIMEDOUT):
+                print("Nothing to do")
+            else:
+                print("Exception: %r - %d" % (e, e.error_no))
     #print("Recv %d bytes" % (len(recd)))
     nbytes += len(recd)
     rec = msg.Record()
