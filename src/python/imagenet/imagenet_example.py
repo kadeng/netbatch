@@ -210,7 +210,11 @@ def train(train_loader, model, criterion, optimizer, epoch, step_every_n=1):
             grad_inf_norm = clip_grad_norm(model.parameters(), infmaxnorm, float('inf'))
             grad_l2_norms.append(grad_l2_norm)
             grad_inf_norms.append(grad_inf_norm)
+<<<<<<< HEAD
             #print("Grad Norms: L2=%f, Inf: %f" % (grad_l2_norm, grad_inf_norm))
+=======
+            print("Grad Norms: L2=%f, Inf: %f" % (grad_l2_norm, grad_inf_norm))
+>>>>>>> 23ffddc80efea27793a26f77dc75984610254b47
             optimizer.step()
             optimizer.zero_grad()
         # measure elapsed time
