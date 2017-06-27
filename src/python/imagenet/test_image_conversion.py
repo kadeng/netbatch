@@ -1,9 +1,11 @@
 import accimage as acc
-import cv2
-import torchvision.transforms as transforms
-from image_transforms import AccimageToNumpy, numpy_to_hsv,RandomRotate, pil_to_numpy
 import glob
 import random
+
+import cv2
+import torchvision.transforms as transforms
+
+from imagenet.image_transforms import AccimageToNumpy, numpy_to_hsv, RandomRotate, pil_to_numpy
 
 images = glob.glob("/data/datasets/imagenet/imagenet-data/train/n02129604/*.JPEG")
 random.shuffle(images)
@@ -18,7 +20,7 @@ for i in range(100):
         transforms.ToPILImage(),
         RandomRotate(-5, 5),
         transforms.Scale(244),
-        transforms.RandomCrop(224),
+        transforms.RandomSizedCrop(224),
         transforms.RandomHorizontalFlip(),
         pil_to_numpy,
         numpy_to_hsv
