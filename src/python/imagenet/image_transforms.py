@@ -1,4 +1,7 @@
-import accimage as acc
+try:
+	import accimage as acc
+except:
+	acc = None
 import random
 import numpy as np
 import cv2
@@ -26,7 +29,9 @@ class AccimageToNumpy(object):
             raise Exception("Unssupported source, has to be accimage image object")
 
 def pil_to_numpy(img):
-    return np.asarray(img)
+    ret = np.asarray(img)
+    #print(ret.shape)
+    return ret
 
 
 def numpy_to_hsv(img_tensor):
@@ -34,7 +39,12 @@ def numpy_to_hsv(img_tensor):
     return bufferhsv
 
 def numpy_hwc_to_chw(img_tensor):
-    return img_tensor.transpose([2,0,1])
+    try:
+        return img_tensor.transpose([2,0,1])
+    except Exception as e:
+        #print(e)
+        #print(img_tensor.shape)
+        raise e
 
 def byte_to_float(img_tensor):
     return img_tensor.astype(np.float32)/255.0

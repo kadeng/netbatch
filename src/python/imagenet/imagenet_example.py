@@ -12,6 +12,8 @@ import torch.optim
 import torch.utils.data
 import torchvision.models as models
 from torch.nn.utils.clip_grad import clip_grad_norm
+from pycrayon import CrayonClient
+import torch.nn as nn
 
 from netbatch_dataset import NetbatchImageDataset, NetBatchSource
 
@@ -35,7 +37,7 @@ parser.add_argument('--epochs', default=90, type=int, metavar='N',
                     help='number of total epochs to run')
 parser.add_argument('--start-epoch', default=0, type=int, metavar='N',
                     help='manual epoch number (useful on restarts)')
-parser.add_argument('-b', '--batch-size', default=160, type=int,
+parser.add_argument('-b', '--batch-size', default=100, type=int,
                     metavar='N', help='mini-batch size (default: 160 )')
 parser.add_argument('--lr', '--learning-rate', default=0.1, type=float,
                     metavar='LR', help='initial learning rate')
@@ -71,7 +73,9 @@ def main():
     # else:
     #     model = torch.nn.DataParallel(model).cuda()
     from imagenet import resnet_prelu
-    model = torch.nn.DataParallel(resnet_prelu.resnet18()).cuda()
+    import imagenet.mobilenet as mobilenet
+    #model = torch.nn.DataParallel(resnet_prelu.resnet18()).cuda()
+    model = torch.nn.DataParallel(mobilenet.MobileNetPrelu()).cuda()
 
     # define loss function (criterion) and optimizer
     criterion = nn.CrossEntropyLoss().cuda()
@@ -79,7 +83,17 @@ def main():
     optimizer = torch.optim.SGD(model.parameters(), args.lr,
                                 momentum=args.momentum,
                                 weight_decay=0.00001, nesterov=True)
-    #optimizer = torch.optim.Adam(model.parameters(), lr=0.01, weight_decay=0.00001)
+
+    traced_tensors = dict()
+
+    for name, module in model.named_modules():
+        if (isinstance(module, nn.Conv2d)):
+            straced_tensors[name + ".Conv2d.weight"] = module.weight.data
+        elif (isinstance(module, nn.BatchNorm2d)):
+            traced_tensors[name + ".BatchNorm2d.running_mean"] = module.running_mean
+            traced_tensors[name + ".BatchNorm2d.running_var"] = module.running_var
+
+        #optimizer = torch.optim.Adam(model.parameters(), lr=0.01, weight_decay=0.00001)
 
     #optimizer = torch.optim.RMSprop(model.parameters(), lr=args.lr, momentum=args.momentum)
     #optimizer = torch.optim.Adagrad(model.parameters(), lr=args.lr)
@@ -101,7 +115,7 @@ def main():
 
     # Data loading code
     traindir = 'train-recs/'
-    valdir = 'validation-recs/'
+    valdir = traindir #'validation-recs/'
     netbatch_source = NetBatchSource(start_batch_id=int(time.time()*1000), req_url = args.req, sub_url=args.sub )
     netbatch_source.connect()
     netbatch_source.start_sub()
@@ -135,16 +149,17 @@ def main():
     if args.evaluate:
         validate(val_loader, model, criterion)
         return
-
+    #cc = CrayonClient()
+    trace = None #cc.create_experiment("mobilenet/example/%f" % (time.time()))
     for epoch in range(args.start_epoch, args.epochs):
         print("Starting Epoch %d" % (epoch))
         adjust_learning_rate(optimizer, epoch)
 
         # train for one epoch
-        train(train_loader, model, criterion, optimizer, epoch, 2)
+        train(train_loader, model, criterion, optimizer, epoch, 2, trace=trace, traced_tensors=traced_tensors)
 
         # evaluate on validation set
-        prec1 = validate(val_loader, model, criterion)
+        prec1 = validate(val_loader, model, criterion, trace=trace)
 
         # remember best prec@1 and save checkpoint
         is_best = prec1 > best_prec1
@@ -153,12 +168,14 @@ def main():
             'epoch': epoch + 1,
             'arch': args.arch,
             'state_dict': model.state_dict(),
-            'best_prec1': best_prec1,
+    
+        'best_prec1': best_prec1,
             'optimizer' : optimizer.state_dict(),
         }, is_best)
 
 
-def train(train_loader, model, criterion, optimizer, epoch, step_every_n=1):
+def train(train_loader, model, criterion, optimizer, epoch, step_every_n=1, trace=None, traced_tensors=None):
+
     batch_time = AverageMeter()
     data_time = AverageMeter()
     losses = AverageMeter()
@@ -193,9 +210,12 @@ def train(train_loader, model, criterion, optimizer, epoch, step_every_n=1):
         # compute output
         output = model(input_var)
         loss = criterion(output, target_var)
+        trace.add_scalar_value("loss", float(loss.data[0]))
 
         # measure accuracy and record loss
         prec1, prec5 = accuracy(output.data, target, topk=(1, 5))
+        trace.add_scalar_value("prec1", float(prec1[0]))
+        trace.add_scalar_value("prec5", float(prec5[0]))
         losses.update(loss.data[0], input.size(0))
         top1.update(prec1[0], input.size(0))
         top5.update(prec5[0], input.size(0))
@@ -207,14 +227,16 @@ def train(train_loader, model, criterion, optimizer, epoch, step_every_n=1):
             if (len(grad_l2_norms)>25):
                 grad_l2_norms[-25:]
             grad_l2_norm = clip_grad_norm(model.parameters(), l2maxnorm, 2)
+            trace.add_scalar_value("grad_l2_norm", float(grad_l2_norm))
             grad_inf_norm = clip_grad_norm(model.parameters(), infmaxnorm, float('inf'))
+            trace.add_scalar_value("grad_inf_norm", float(grad_inf_norm))
             grad_l2_norms.append(grad_l2_norm)
             grad_inf_norms.append(grad_inf_norm)
-<<<<<<< HEAD
-            #print("Grad Norms: L2=%f, Inf: %f" % (grad_l2_norm, grad_inf_norm))
-=======
             print("Grad Norms: L2=%f, Inf: %f" % (grad_l2_norm, grad_inf_norm))
->>>>>>> 23ffddc80efea27793a26f77dc75984610254b47
+            #for name in traced_tensors.keys():
+                #print("%s - mean %f - std %f - min %f - max %f" % (name,
+                #        torch.mean(traced_tensors[name]), torch.std(traced_tensors[name]),
+                #                    torch.min(traced_tensors[name]), torch.max(traced_tensors[name])))
             optimizer.step()
             optimizer.zero_grad()
         # measure elapsed time
@@ -235,11 +257,9 @@ def train(train_loader, model, criterion, optimizer, epoch, step_every_n=1):
             print("Gradient L2-Norm Quantiles: Max: %f, 80%%: %f - 50%%: %f" % (l2n.max(), l2n.quantile(0.8), l2n.quantile(0.5)))
             lin = pandas.Series(grad_inf_norms)
             print("Gradient Inf-Norm Quantiles: Max: %f, 80%% %f - 50%%t: %f" % (lin.max(), lin.quantile(0.8), lin.quantile(0.5)))
-            if (len(grad_l2_norms)>=10):
-                l2maxnorm = l2n.quantile(0.8)
-                infmaxnorm = lin.quantile(0.8)
 
-def validate(val_loader, model, criterion):
+
+def validate(val_loader, model, criterion, trace=None):
     batch_time = AverageMeter()
     losses = AverageMeter()
     top1 = AverageMeter()

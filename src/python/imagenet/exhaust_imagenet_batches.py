@@ -9,7 +9,7 @@ import numpy.random as npr
 import numpy as np
 import os.path
 import cv2
-import accimage
+#import accimage
 sub = nnpy.Socket(nnpy.AF_SP, nnpy.PULL)
 #sub.connect('tcp://144.76.34.134:9877')
 #sub.bind('tcp://127.0.0.1:9878')
